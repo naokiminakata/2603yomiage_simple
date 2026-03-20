@@ -32,41 +32,102 @@
       flex: 1;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-      gap: 16px;
+      padding: 20px;
+      gap: 12px;
     }
     .select-screen h1 {
       font-size: 1.2rem;
       text-align: center;
+      margin-bottom: 4px;
     }
-    .select-screen select {
-      width: min(500px, 100%);
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 12px;
-      font-size: 15px;
-      font-family: inherit;
-      color: var(--text);
-      background: #fff;
-    }
-    .select-screen .load-btn {
-      width: min(500px, 100%);
-      border: none;
-      background: var(--accent);
-      color: #fff;
-      border-radius: 10px;
-      padding: 14px;
-      font-size: 16px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .select-screen .load-btn:disabled { opacity: 0.5; }
     .select-screen .status-text {
       font-size: 14px;
       color: var(--sub);
       text-align: center;
+    }
+
+    /* フォルダツリー */
+    .file-tree {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .folder-group {
+      margin-bottom: 6px;
+    }
+    .folder-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #f0fdf4;
+      border: 1px solid #d1fae5;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--accent2);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .folder-header .folder-icon { font-size: 18px; }
+    .folder-header .folder-path {
+      flex: 1;
+      word-break: break-word;
+    }
+    .folder-header .toggle-icon {
+      font-size: 12px;
+      color: var(--sub);
+      transition: transform 0.2s;
+    }
+    .folder-group.open .toggle-icon {
+      transform: rotate(90deg);
+    }
+    .folder-files {
+      display: none;
+      padding: 4px 0 4px 16px;
+    }
+    .folder-group.open .folder-files {
+      display: block;
+    }
+    .file-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      margin: 3px 0;
+      background: var(--card);
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--text);
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .file-item:active {
+      background: var(--active-bg);
+      border-color: var(--accent);
+    }
+    .file-item .file-icon { font-size: 16px; color: var(--sub); }
+    .file-item .file-name { flex: 1; }
+
+    /* ルート直下のファイル（フォルダなし） */
+    .root-file {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      margin: 3px 0;
+      background: var(--card);
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--text);
+    }
+    .root-file:active {
+      background: var(--active-bg);
+      border-color: var(--accent);
     }
 
     /* === 再生画面: 全画面テキスト表示 === */
@@ -212,9 +273,8 @@
   <!-- ファイル選択画面 -->
   <div class="select-screen" id="selectScreen">
     <h1>📖 読み上げプレーヤー</h1>
-    <select id="serverFileSelect"></select>
-    <button id="loadServerBtn" type="button" class="load-btn" disabled>読み込み</button>
     <div class="status-text" id="statusSelect">GitHubからファイルリストを取得中...</div>
+    <div class="file-tree" id="fileTree"></div>
   </div>
 
   <!-- 再生画面 -->
@@ -239,10 +299,9 @@
   </div>
 
   <script>
-    const serverFileSelect = document.getElementById('serverFileSelect');
-    const loadServerBtn = document.getElementById('loadServerBtn');
     const selectScreen = document.getElementById('selectScreen');
     const playerScreen = document.getElementById('playerScreen');
+    const fileTree = document.getElementById('fileTree');
     const backBtn = document.getElementById('backBtn');
     const fileNameEl = document.getElementById('fileName');
     const progressText = document.getElementById('progressText');
@@ -282,7 +341,6 @@
         }
         lineListEl.appendChild(li);
       });
-      // アクティブ行をスクロールで見えるようにする
       if (currentIndex >= 0) {
         const activeLi = lineListEl.children[currentIndex];
         if (activeLi) {
@@ -310,7 +368,6 @@
 
     function speakLine(index) {
       if (index < 0 || index >= lines.length) return;
-
       stopSpeak();
       currentIndex = index;
       renderList();
@@ -326,19 +383,9 @@
         utt.lang = 'ja-JP';
       }
       utt.rate = currentRate;
-
-      utt.onstart = () => {
-        speaking = true;
-      };
-
-      utt.onend = () => {
-        speaking = false;
-      };
-
-      utt.onerror = () => {
-        speaking = false;
-      };
-
+      utt.onstart = () => { speaking = true; };
+      utt.onend = () => { speaking = false; };
+      utt.onerror = () => { speaking = false; };
       synth.speak(utt);
     }
 
@@ -349,24 +396,15 @@
 
     function playPrevious() {
       if (!lines.length) return;
-      if (currentIndex === -1) {
-        playFromFirst();
-        return;
-      }
+      if (currentIndex === -1) { playFromFirst(); return; }
       speakLine(Math.max(0, currentIndex - 1));
     }
 
     function playNext() {
       if (!lines.length) return;
-      if (currentIndex === -1) {
-        playFromFirst();
-        return;
-      }
+      if (currentIndex === -1) { playFromFirst(); return; }
       const next = currentIndex + 1;
-      if (next >= lines.length) {
-        stopSpeak();
-        return;
-      }
+      if (next >= lines.length) { stopSpeak(); return; }
       speakLine(next);
     }
 
@@ -390,8 +428,108 @@
         target.tagName === 'BUTTON' ||
         target.closest('button') ||
         target.closest('select') ||
-        target.closest('input')
+        target.closest('input') ||
+        target.closest('.file-item') ||
+        target.closest('.root-file') ||
+        target.closest('.folder-header')
       ));
+    }
+
+    // ファイルを読み込んで再生画面へ
+    function loadFile(filePath) {
+      statusSelect.textContent = 'ファイルをダウンロード中...';
+      const fileUrl = rawBase + encodeURI(filePath);
+      fetch(fileUrl)
+        .then(res => {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.text();
+        })
+        .then(text => {
+          lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+          stopSpeak();
+          currentIndex = -1;
+
+          const displayName = filePath.replace(/^読み上げデータ\//, '');
+          if (!lines.length) {
+            statusSelect.textContent = 'ファイル内に読み上げ対象の行がありません。';
+            return;
+          }
+          renderList();
+          showPlayerScreen(displayName);
+        })
+        .catch(err => {
+          statusSelect.textContent = '読み込み失敗: ' + err.message;
+          console.error(err);
+        });
+    }
+
+    // フォルダツリーを構築
+    function buildFileTree(files) {
+      // 階層ツリー構造を構築
+      const tree = {};
+      files.forEach(file => {
+        const rel = file.replace(/^読み上げデータ\//, '');
+        const parts = rel.split('/');
+        let node = tree;
+        for (let i = 0; i < parts.length - 1; i++) {
+          if (!node[parts[i]]) node[parts[i]] = {};
+          node = node[parts[i]];
+        }
+        // ファイル名を _files 配列に格納
+        if (!node._files) node._files = [];
+        node._files.push({ name: parts[parts.length - 1], path: file });
+      });
+
+      fileTree.innerHTML = '';
+      renderTree(tree, fileTree, []);
+    }
+
+    function renderTree(node, container, pathParts) {
+      // まずフォルダを表示
+      const folders = Object.keys(node).filter(k => k !== '_files').sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+      );
+
+      folders.forEach(folderName => {
+        const fullPath = [...pathParts, folderName];
+        const group = document.createElement('div');
+        group.className = 'folder-group open';
+
+        const header = document.createElement('div');
+        header.className = 'folder-header';
+        header.innerHTML = `
+          <span class="folder-icon">📁</span>
+          <span class="folder-path">${fullPath.join(' / ')}</span>
+          <span class="toggle-icon">▶</span>
+        `;
+        header.addEventListener('click', () => {
+          group.classList.toggle('open');
+        });
+
+        const filesContainer = document.createElement('div');
+        filesContainer.className = 'folder-files';
+
+        group.appendChild(header);
+        group.appendChild(filesContainer);
+        container.appendChild(group);
+
+        // 再帰的にサブフォルダとファイルを表示
+        renderTree(node[folderName], filesContainer, fullPath);
+      });
+
+      // ファイルを表示
+      if (node._files) {
+        node._files.sort((a, b) =>
+          a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+        );
+        node._files.forEach(file => {
+          const item = document.createElement('div');
+          item.className = pathParts.length > 0 ? 'file-item' : 'root-file';
+          item.innerHTML = `<span class="file-icon">📄</span><span class="file-name">${file.name}</span>`;
+          item.addEventListener('click', () => loadFile(file.path));
+          container.appendChild(item);
+        });
+      }
     }
 
     // GitHub APIを使用してファイルリストを動的に取得
@@ -407,52 +545,16 @@
       })
       .then(data => {
         if (!data.tree) throw new Error('ツリーデータが見つかりません');
-        
+
         const files = data.tree
           .filter(item => item.type === 'blob' && item.path.startsWith('読み上げデータ/') && item.path.endsWith('.txt'))
           .map(item => item.path);
 
-        files.sort((a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'}));
-
-        // サブフォルダごとにグループ化
-        const groups = {};
-        files.forEach(file => {
-          const rel = file.replace(/^読み上げデータ\//, '');
-          const parts = rel.split('/');
-          if (parts.length > 1) {
-            const folder = parts.slice(0, -1).join('/');
-            if (!groups[folder]) groups[folder] = [];
-            groups[folder].push({ path: file, name: parts[parts.length - 1] });
-          } else {
-            if (!groups['']) groups[''] = [];
-            groups[''].push({ path: file, name: rel });
-          }
-        });
-
-        for (const [folder, items] of Object.entries(groups)) {
-          if (folder === '') {
-            items.forEach(item => {
-              const opt = document.createElement('option');
-              opt.value = item.path;
-              opt.textContent = item.name;
-              serverFileSelect.appendChild(opt);
-            });
-          } else {
-            const optgroup = document.createElement('optgroup');
-            optgroup.label = folder;
-            items.forEach(item => {
-              const opt = document.createElement('option');
-              opt.value = item.path;
-              opt.textContent = item.name;
-              optgroup.appendChild(opt);
-            });
-            serverFileSelect.appendChild(optgroup);
-          }
-        }
+        files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
         if (files.length > 0) {
-          loadServerBtn.disabled = false;
-          statusSelect.textContent = 'ファイルを選択して「読み込み」を押してください。';
+          statusSelect.textContent = 'ファイルをタップして読み込みます。';
+          buildFileTree(files);
         } else {
           statusSelect.textContent = '「読み上げデータ」フォルダ内にテキストファイルが見つかりません。';
         }
@@ -461,47 +563,6 @@
         statusSelect.textContent = 'エラー: ' + err.message;
         console.error(err);
       });
-
-    loadServerBtn.addEventListener('click', () => {
-      const selectedFile = serverFileSelect.value;
-      if (!selectedFile) return;
-      
-      loadServerBtn.disabled = true;
-      statusSelect.textContent = 'ファイルをダウンロード中...';
-      
-      const fileUrl = rawBase + encodeURI(selectedFile);
-      fetch(fileUrl)
-        .then(res => {
-          if (!res.ok) throw new Error('ファイルの取得に失敗しました (HTTP ' + res.status + ')');
-          return res.text();
-        })
-        .then(text => {
-          lines = text
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0);
-
-          stopSpeak();
-          currentIndex = -1;
-
-          const displayName = selectedFile.replace(/^読み上げデータ\//, '');
-          if (!lines.length) {
-            statusSelect.textContent = 'ファイル内に読み上げ対象の行がありません。';
-            loadServerBtn.disabled = false;
-            return;
-          }
-
-          renderList();
-          showPlayerScreen(displayName);
-        })
-        .catch(err => {
-          statusSelect.textContent = 'ファイルの読み込みに失敗しました。(' + err.message + ')';
-          console.error(err);
-        })
-        .finally(() => {
-          loadServerBtn.disabled = false;
-        });
-    });
 
     backBtn.addEventListener('click', showSelectScreen);
     firstBtn.addEventListener('click', playFromFirst);
