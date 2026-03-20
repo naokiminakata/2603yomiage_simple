@@ -104,12 +104,18 @@
 </head>
 <body>
   <main class="app" id="appRoot">
-    <h1>iPhone単体: 入力テキストを行ごとに読み上げ</h1>
+    <h1>iPhone単体: テキストファイルを行ごとに読み上げ</h1>
     <select id="voiceSelect"></select>
-    <textarea id="textInput" placeholder="ここにテキストを入力してください。改行ごとに1つの読み上げ単位になります。"></textarea>
+    
+    <div style="margin-bottom: 15px;">
+      <label for="serverFileSelect" style="display: block; margin-bottom: 8px; font-weight: bold; font-size: 14px;">読み上げるサーバー上のテキストファイルを選択：</label>
+      <div style="display: flex; gap: 8px;">
+        <select id="serverFileSelect" style="flex: 1; margin-bottom: 0;"></select>
+        <button id="loadServerBtn" type="button" class="primary" style="white-space: nowrap;">読み込み</button>
+      </div>
+    </div>
 
     <div class="row">
-      <button id="loadBtn" type="button" class="primary">行を読み込み</button>
       <button id="startBtn" type="button" class="primary" disabled>1行目を再生</button>
       <button id="firstBtn" type="button" disabled>最初へ戻る</button>
       <button id="prevBtn" type="button" disabled>1つ前へ戻る</button>
@@ -124,8 +130,8 @@
   </main>
 
   <script>
-    const textInput = document.getElementById('textInput');
-    const loadBtn = document.getElementById('loadBtn');
+    const serverFileSelect = document.getElementById('serverFileSelect');
+    const loadServerBtn = document.getElementById('loadServerBtn');
     const startBtn = document.getElementById('startBtn');
     const firstBtn = document.getElementById('firstBtn');
     const prevBtn = document.getElementById('prevBtn');
@@ -267,40 +273,128 @@
     function canHandleTapTarget(target) {
       return !(target && (
         target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
         target.tagName === 'SELECT' ||
         target.tagName === 'BUTTON' ||
         target.closest('button') ||
-        target.closest('textarea') ||
-        target.closest('select')
+        target.closest('select') ||
+        target.closest('input')
       ));
     }
 
-    function handleLoadLines(event) {
-      if (event) event.preventDefault();
-      lines = textInput.value
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
+    // GitHub APIを使用してファイルリストを動的に取得
+    const owner = 'naokiminakata';
+    const repo = '2603yomiage_simple';
+    const branch = 'main';
+    const rawBase = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/`;
 
-      stopSpeak();
-      currentIndex = -1;
-      startBtn.disabled = lines.length === 0;
-      firstBtn.disabled = lines.length === 0;
-      prevBtn.disabled = lines.length === 0;
+    fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`)
+      .then(res => {
+        if (!res.ok) throw new Error('GitHub APIへの通信に失敗しました');
+        return res.json();
+      })
+      .then(data => {
+        if (!data.tree) throw new Error('ツリーデータが見つかりません');
+        
+        // 「読み上げデータ/」以下にある .txt ファイルのみを抽出
+        const files = data.tree
+          .filter(item => item.type === 'blob' && item.path.startsWith('読み上げデータ/') && item.path.endsWith('.txt'))
+          .map(item => item.path);
 
-      if (!lines.length) {
-        updateStatus('読み上げ対象の行がありません。');
-      } else {
-        updateStatus(`${lines.length} 行を読み込みました。タップ/スペースまたは「1行目を再生」で開始します。`);
-      }
+        // Natural sorting
+        files.sort((a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'}));
 
-      renderList();
-      textInput.blur();
-    }
+        // サブフォルダごとにグループ化
+        const groups = {};
+        files.forEach(file => {
+          const rel = file.replace(/^読み上げデータ\//, '');
+          const parts = rel.split('/');
+          if (parts.length > 1) {
+            const folder = parts.slice(0, -1).join('/');
+            if (!groups[folder]) groups[folder] = [];
+            groups[folder].push({ path: file, name: parts[parts.length - 1] });
+          } else {
+            if (!groups['']) groups[''] = [];
+            groups[''].push({ path: file, name: rel });
+          }
+        });
 
-    loadBtn.addEventListener('click', handleLoadLines);
-    loadBtn.addEventListener('touchend', handleLoadLines, { passive: false });
+        // optgroupを使ってドロップダウンに追加
+        for (const [folder, items] of Object.entries(groups)) {
+          if (folder === '') {
+            items.forEach(item => {
+              const opt = document.createElement('option');
+              opt.value = item.path;
+              opt.textContent = item.name;
+              serverFileSelect.appendChild(opt);
+            });
+          } else {
+            const optgroup = document.createElement('optgroup');
+            optgroup.label = folder;
+            items.forEach(item => {
+              const opt = document.createElement('option');
+              opt.value = item.path;
+              opt.textContent = item.name;
+              optgroup.appendChild(opt);
+            });
+            serverFileSelect.appendChild(optgroup);
+          }
+        }
+
+        if (files.length > 0) {
+          updateStatus('GitHubからファイルリストを取得しました。選択して「読み込み」を押してください。');
+        } else {
+          updateStatus('「読み上げデータ」フォルダ内にテキストファイルが見つかりません。');
+        }
+      })
+      .catch(err => {
+        updateStatus('エラー: GitHubからファイルリストを取得できませんでした。(' + err.message + ')');
+        console.error(err);
+      });
+
+    loadServerBtn.addEventListener('click', () => {
+      const selectedFile = serverFileSelect.value;
+      if (!selectedFile) return;
+      
+      loadServerBtn.disabled = true;
+      updateStatus('ファイルをダウンロード中...');
+      
+      // raw.githubusercontent.com 経由でファイルを取得
+      const fileUrl = rawBase + encodeURI(selectedFile);
+      fetch(fileUrl)
+        .then(res => {
+          if (!res.ok) throw new Error('ファイルの取得に失敗しました (HTTP ' + res.status + ')');
+          return res.text();
+        })
+        .then(text => {
+          lines = text
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+
+          stopSpeak();
+          currentIndex = -1;
+          startBtn.disabled = lines.length === 0;
+          firstBtn.disabled = lines.length === 0;
+          prevBtn.disabled = lines.length === 0;
+
+          // 表示名をわかりやすくする
+          const displayName = selectedFile.replace(/^読み上げデータ\//, '');
+          if (!lines.length) {
+            updateStatus('ファイル内に読み上げ対象の行がありません。');
+          } else {
+            updateStatus(`「${displayName}」から ${lines.length} 行を読み込みました。タップまたは「1行目を再生」で開始します。`);
+          }
+
+          renderList();
+        })
+        .catch(err => {
+          updateStatus('ファイルの読み込みに失敗しました。(' + err.message + ')');
+          console.error(err);
+        })
+        .finally(() => {
+          loadServerBtn.disabled = false;
+        });
+    });
 
     startBtn.addEventListener('click', playFromFirst);
     firstBtn.addEventListener('click', playFromFirst);
@@ -314,7 +408,6 @@
       const target = event.target;
       const isTyping = target && (
         target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
         target.tagName === 'SELECT' ||
         target.isContentEditable
       );
@@ -334,7 +427,7 @@
     }
     fillVoiceSelect();
     setRate(2);
-    updateStatus('準備完了。テキストを入力して「行を読み込み」を押してください。');
+    updateStatus('準備完了。GitHubのファイルリストを確認しています...');
   </script>
 </body>
 </html>
