@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>iPhone単体 行ごと読み上げ</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --sub: #6b7280;
+      --line: #d1d5db;
+      --accent: #0f766e;
+      --accent2: #134e4a;
+    }
+    body {
+      margin: 0;
+      font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif;
+      background: linear-gradient(135deg, #eef2ff, #f0fdf4);
+      color: var(--text);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 12px;
+      box-sizing: border-box;
+    }
+    .app {
+      width: min(900px, 100%);
+      background: var(--card);
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.08);
+    }
+    h1 { margin: 0 0 10px; font-size: 1.1rem; }
+    textarea, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 14px;
+      box-sizing: border-box;
+      font-family: inherit;
+      color: var(--text);
+      margin-bottom: 10px;
+      background: #fff;
+    }
+    textarea { min-height: 180px; resize: vertical; line-height: 1.5; }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 14px;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent2);
+    }
+    button:disabled { opacity: 0.5; }
+    button.rate.active {
+      background: #d1fae5;
+      border-color: #10b981;
+      color: #065f46;
+      font-weight: 700;
+    }
+    .status {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 10px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .hint { color: var(--sub); font-size: 13px; margin: 0 0 10px; }
+    ol {
+      margin: 0;
+      padding-left: 20px;
+      max-height: 38vh;
+      overflow: auto;
+      border-top: 1px solid #f0f0f0;
+      padding-top: 8px;
+    }
+    li {
+      margin: 2px 0;
+      font-size: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    li.active { color: var(--accent2); font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main class="app" id="appRoot">
+    <h1>iPhone単体: 入力テキストを行ごとに読み上げ</h1>
+    <select id="voiceSelect"></select>
+    <textarea id="textInput" placeholder="ここにテキストを入力してください。改行ごとに1つの読み上げ単位になります。"></textarea>
+
+    <div class="row">
+      <button id="loadBtn" type="button" class="primary">行を読み込み</button>
+      <button id="startBtn" type="button" class="primary" disabled>1行目を再生</button>
+      <button id="firstBtn" type="button" disabled>最初へ戻る</button>
+      <button id="prevBtn" type="button" disabled>1つ前へ戻る</button>
+      <button id="rate1Btn" type="button" class="rate">1x</button>
+      <button id="rate15Btn" type="button" class="rate">1.5x</button>
+      <button id="rate2Btn" type="button" class="rate">2x</button>
+    </div>
+
+    <p class="hint">画面タップまたはスペース: 最初の開始、または次の行へ進む（再生中でも次にスキップ）。</p>
+    <div class="status" id="status">テキストを入力して「行を読み込み」を押してください。</div>
+    <ol id="lineList"></ol>
+  </main>
+
+  <script>
+    const textInput = document.getElementById('textInput');
+    const loadBtn = document.getElementById('loadBtn');
+    const startBtn = document.getElementById('startBtn');
+    const firstBtn = document.getElementById('firstBtn');
+    const prevBtn = document.getElementById('prevBtn');
+    const rate1Btn = document.getElementById('rate1Btn');
+    const rate15Btn = document.getElementById('rate15Btn');
+    const rate2Btn = document.getElementById('rate2Btn');
+    const statusEl = document.getElementById('status');
+    const lineListEl = document.getElementById('lineList');
+    const voiceSelect = document.getElementById('voiceSelect');
+
+    const synth = window.speechSynthesis;
+
+    let lines = [];
+    let currentIndex = -1;
+    let currentRate = 2;
+    let speaking = false;
+
+    function updateStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function renderList() {
+      lineListEl.innerHTML = '';
+      lines.forEach((line, idx) => {
+        const li = document.createElement('li');
+        li.textContent = `${idx + 1}. ${line}`;
+        if (idx === currentIndex) li.classList.add('active');
+        lineListEl.appendChild(li);
+      });
+    }
+
+    function setRate(rate) {
+      currentRate = rate;
+      rate1Btn.classList.toggle('active', rate === 1);
+      rate15Btn.classList.toggle('active', rate === 1.5);
+      rate2Btn.classList.toggle('active', rate === 2);
+    }
+
+    function getVoices() {
+      return synth.getVoices().filter((v) => v.lang && v.lang.toLowerCase().startsWith('ja'));
+    }
+
+    function fillVoiceSelect() {
+      const voices = getVoices();
+      voiceSelect.innerHTML = '';
+      if (!voices.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '日本語音声が見つかりません';
+        voiceSelect.appendChild(opt);
+        return;
+      }
+
+      voices.forEach((voice, idx) => {
+        const opt = document.createElement('option');
+        opt.value = voice.name;
+        opt.textContent = `${voice.name} (${voice.lang})`;
+        if (idx === 0) opt.selected = true;
+        voiceSelect.appendChild(opt);
+      });
+    }
+
+    function selectedVoice() {
+      const voices = getVoices();
+      const name = voiceSelect.value;
+      return voices.find((v) => v.name === name) || voices[0] || null;
+    }
+
+    function stopSpeak() {
+      synth.cancel();
+      speaking = false;
+    }
+
+    function speakLine(index) {
+      if (index < 0 || index >= lines.length) return;
+
+      stopSpeak();
+      currentIndex = index;
+      renderList();
+
+      const text = lines[index];
+      const utt = new SpeechSynthesisUtterance(text);
+      const voice = selectedVoice();
+      if (voice) {
+        utt.voice = voice;
+        utt.lang = voice.lang;
+      } else {
+        utt.lang = 'ja-JP';
+      }
+      utt.rate = currentRate;
+
+      utt.onstart = () => {
+        speaking = true;
+        updateStatus(`再生中: ${currentIndex + 1}/${lines.length}`);
+      };
+
+      utt.onend = () => {
+        speaking = false;
+        updateStatus(`再生完了: ${currentIndex + 1}/${lines.length} - タップ/スペースで次へ`);
+      };
+
+      utt.onerror = () => {
+        speaking = false;
+        updateStatus('読み上げに失敗しました。音声設定を変更して再実行してください。');
+      };
+
+      synth.speak(utt);
+    }
+
+    function playFromFirst() {
+      if (!lines.length) return;
+      speakLine(0);
+    }
+
+    function playPrevious() {
+      if (!lines.length) return;
+      if (currentIndex === -1) {
+        playFromFirst();
+        return;
+      }
+      speakLine(Math.max(0, currentIndex - 1));
+    }
+
+    function playNext() {
+      if (!lines.length) return;
+      if (currentIndex === -1) {
+        playFromFirst();
+        return;
+      }
+      const next = currentIndex + 1;
+      if (next >= lines.length) {
+        stopSpeak();
+        updateStatus('最後まで再生しました。');
+        return;
+      }
+      speakLine(next);
+    }
+
+    function canHandleTapTarget(target) {
+      return !(target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.tagName === 'BUTTON' ||
+        target.closest('button') ||
+        target.closest('textarea') ||
+        target.closest('select')
+      ));
+    }
+
+    function handleLoadLines(event) {
+      if (event) event.preventDefault();
+      lines = textInput.value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+      stopSpeak();
+      currentIndex = -1;
+      startBtn.disabled = lines.length === 0;
+      firstBtn.disabled = lines.length === 0;
+      prevBtn.disabled = lines.length === 0;
+
+      if (!lines.length) {
+        updateStatus('読み上げ対象の行がありません。');
+      } else {
+        updateStatus(`${lines.length} 行を読み込みました。タップ/スペースまたは「1行目を再生」で開始します。`);
+      }
+
+      renderList();
+      textInput.blur();
+    }
+
+    loadBtn.addEventListener('click', handleLoadLines);
+    loadBtn.addEventListener('touchend', handleLoadLines, { passive: false });
+
+    startBtn.addEventListener('click', playFromFirst);
+    firstBtn.addEventListener('click', playFromFirst);
+    prevBtn.addEventListener('click', playPrevious);
+    rate1Btn.addEventListener('click', () => setRate(1));
+    rate15Btn.addEventListener('click', () => setRate(1.5));
+    rate2Btn.addEventListener('click', () => setRate(2));
+
+    window.addEventListener('keydown', (event) => {
+      if (event.code !== 'Space') return;
+      const target = event.target;
+      const isTyping = target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable
+      );
+      if (isTyping) return;
+      event.preventDefault();
+      playNext();
+    }, true);
+
+    document.addEventListener('pointerup', (event) => {
+      if (!lines.length) return;
+      if (!canHandleTapTarget(event.target)) return;
+      playNext();
+    });
+
+    if ('onvoiceschanged' in synth) {
+      synth.onvoiceschanged = fillVoiceSelect;
+    }
+    fillVoiceSelect();
+    setRate(2);
+    updateStatus('準備完了。テキストを入力して「行を読み込み」を押してください。');
+  </script>
+</body>
+</html>
